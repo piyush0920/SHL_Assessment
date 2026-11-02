@@ -1,164 +1,138 @@
-# 🎙️ Spoken English Grammar Scoring Engine
+# Spoken-English Grammar Scoring Engine
 
-An end-to-end **multimodal machine learning system** for predicting spoken English grammar scores from 45–60 second audio clips.
+A multimodal regression project that predicts a spoken-English grammar score from short audio recordings. The system combines linguistic features extracted from speech transcripts with representations learned directly from audio.
 
-The objective is to predict a continuous grammar score on a **0–5 scale**, combining information from both **what the speaker says** and **how the speaker speaks**.
+**Task:** Predict a continuous score from 0 to 5 using information about both what the speaker says and how the speaker speaks.
 
----
+## Problem and data
 
-## 🎯 Problem Statement
+The project README records the following dataset split:
 
-Given a short `.wav` speech recording, predict the corresponding **grammar proficiency score (0–5)**.
+| Partition | Samples |
+|---|---:|
+| Training | 769 |
+| Test | 216 |
+| Audio duration | Approximately 45–60 seconds per clip |
+| Target | Grammar score on a 0–5 scale |
 
-The dataset contains:
+The audio dataset and pretrained model files are not included in this repository. The notebook discovers source files from a Kaggle input environment, so reproducing the complete pipeline requires access to the original assessment data and a compatible runtime.
 
-- **769 training samples**
-- **216 test samples**
-- Audio duration: approximately **45–60 seconds**
-- Evaluation based on **RMSE and Pearson correlation**
+## Modeling pipeline
 
----
+The project approaches grammar scoring as a multimodal regression problem.
 
-## 🧠 Methodology
+### 1. Speech transcription
 
-I approached the problem as a **multimodal regression task**, since spoken grammar quality is influenced by both linguistic content and acoustic characteristics.
+- Transcribe audio using **Whisper-small**.
+- Retain useful speech disfluencies such as fillers, repetitions, and false starts.
+- Cache transcription outputs to avoid repeating expensive inference.
 
-### 1. Speech-to-Text with Whisper
+### 2. Linguistic and grammar features
 
-The audio recordings are first transcribed using **Whisper-small**.
+Engineer interpretable features from transcripts, including:
 
-The transcription provides the textual representation required for linguistic and grammar analysis, while retaining useful disfluencies such as fillers, repetitions, and false starts.
+- Grammar-error signals using **LanguageTool**.
+- Syntactic structure and dependency features using **spaCy**.
+- Sentence length and complexity.
+- Vocabulary richness and lexical diversity.
+- Repetition, filler words, and disfluency patterns.
+- GPT-2 language-model perplexity.
 
-### 2. Linguistic & Grammar Features
+### 3. Text representations
 
-From the transcripts, I engineered interpretable features covering:
+- Generate sentence embeddings with **MPNet**.
+- Fine-tune **DeBERTa-v3-base** for task-specific regression on transcript text.
 
-- Grammar error density using **LanguageTool**
-- Syntactic structure using **spaCy**
-- Sentence length and complexity
-- Vocabulary richness and lexical diversity
-- Repetition and disfluency patterns
-- Filler-word usage
-- Clause and dependency characteristics
-- Language-model perplexity using **GPT-2**
+### 4. Acoustic representations
 
-These features provide explicit signals related to grammatical quality and fluency.
+Use pretrained speech encoders to capture information that may be lost during transcription:
 
-### 3. Text Embeddings
+- **WavLM** representations.
+- **Whisper encoder** hidden states.
+- Statistical pooling over temporal representations to create fixed-length feature vectors.
 
-I used **MPNet sentence embeddings** to capture semantic and contextual information that handcrafted features cannot fully represent.
+### 5. Base regressors and stacking
 
-A fine-tuned **DeBERTa-v3-base regression model** was also trained directly on the transcripts to learn task-specific linguistic representations.
+The notebook compares complementary model families, including Ridge Regression, Support Vector Regression, Gradient Boosting, multimodal Ridge, and fine-tuned DeBERTa.
 
-### 4. Acoustic Representation Learning
+Out-of-fold predictions are generated with five-fold cross-validation and combined using a **non-negative linear stacking model**. The transformer branch also includes multi-seed experiments to examine prediction stability.
 
-Because transcription can lose information about pronunciation, pauses, fluency and delivery, I also modeled the original audio directly.
-
-Pretrained representations were extracted from:
-
-- **WavLM**
-- **Whisper encoder**
-
-Temporal hidden representations were aggregated using statistical pooling to create fixed-length acoustic feature vectors.
-
-### 5. Multiple Regression Models
-
-Different model families were used to capture complementary patterns:
-
-- Ridge Regression
-- Support Vector Regression (SVR)
-- Gradient Boosting
-- Fine-tuned DeBERTa
-
-A multimodal Ridge model was also trained using combinations of handcrafted, text and audio representations.
-
-### 6. Out-of-Fold Stacking
-
-All base models were evaluated using **5-fold cross-validation** and generated **out-of-fold (OOF) predictions**.
-
-These predictions were then combined using a **non-negative linear stacking model**.
-
-This allows the ensemble to learn how much each model contributes while reducing the risk of overfitting on the relatively small training set.
-
-### 7. Model Stability
-
-The fine-tuned DeBERTa branch was trained using **multiple random seeds**, and the predictions were averaged to improve stability and reduce sensitivity to initialization.
-
----
-
-## 🔬 Key Design Decisions
-
-### Why multimodal?
-
-Grammar is not purely a text problem. Acoustic information can capture aspects of fluency and speech delivery that may not survive transcription.
-
-### Why pretrained speech representations?
-
-Models such as WavLM provide rich representations learned from large-scale speech data, allowing the system to capture acoustic information without training an audio encoder from scratch.
-
-### Why handcrafted features?
-
-They provide interpretable signals such as grammar errors, sentence structure, repetition and disfluency, complementing neural embeddings.
-
-### Why stacking?
-
-With only 769 labelled samples, combining several complementary models through OOF stacking was more robust than relying on a single model.
-
-### Why non-negative stacking?
-
-Constraining ensemble weights to be non-negative reduces unstable cancellations between correlated models and provides a more controlled ensemble.
-
----
-
-## 📊 Final Performance
-
-**Best observed leaderboard score: 0.3668**
-
-| Component | Role |
-|---|---|
-| Whisper-small | Speech transcription |
-| LanguageTool | Grammar error analysis |
-| spaCy | Syntactic analysis |
-| GPT-2 | Linguistic fluency / perplexity |
-| MPNet | Semantic text representation |
-| WavLM | Acoustic representation |
-| Whisper Encoder | Speech representation |
-| Ridge / SVR / Gradient Boosting | Base regression models |
-| DeBERTa-v3-base | Task-specific text regression |
-| Non-negative Linear Stack | Final ensemble |
-
----
-
-## 🏗️ Overall Pipeline
+## Architecture at a glance
 
 ```text
-                Audio (.wav)
-                      │
-             ┌────────┴────────┐
-             │                 │
-        Whisper-small      Audio Encoders
-             │                 │
-        Transcript        WavLM / Whisper
-             │                 │
-     ┌───────┼────────┐        │
-     │       │        │        │
-LanguageTool spaCy   GPT-2     │
-     │       │        │        │
-     └───────┴────────┘        │
-             │                 │
-     Handcrafted Features      │
-             │                 │
-         MPNet Embedding       │
-             │                 │
-       Fine-tuned DeBERTa      │
-             │                 │
-             └────────┬────────┘
-                      │
-             Multiple Regressors
-                      │
-             5-Fold OOF Predictions
-                      │
-          Non-Negative Linear Stacker
-                      │
-                 Final Score
-                   (0–5)
+Audio recording
+      |
+      +----------------------------+
+      |                            |
+Whisper transcription        Audio encoders
+      |                       WavLM / Whisper
+      |                            |
+Grammar + syntax features          |
+      |                            |
+MPNet / DeBERTa                    |
+      |                            |
+      +-------------+--------------+
+                    |
+             Base regressors
+                    |
+          Five-fold OOF predictions
+                    |
+        Non-negative linear stacker
+                    |
+          Predicted grammar score
+                  (0–5)
+```
+
+## Reported result
+
+The existing project README records a best observed score of **0.3668**. The repository does not currently identify the leaderboard metric, scoring direction, or a baseline alongside that number. Treat it as a recorded project result rather than a directly interpretable accuracy or RMSE until the evaluation metric and competition context are added.
+
+For a meaningful model comparison, report the validation/leaderboard metric name, whether lower or higher is better, and the baseline score next to the ensemble result.
+
+## Technology stack
+
+| Area | Tools |
+|---|---|
+| Audio transcription | Whisper |
+| Acoustic representations | WavLM, Whisper encoder |
+| NLP features | LanguageTool, spaCy, GPT-2 |
+| Text representations | MPNet, DeBERTa-v3-base |
+| Regression | Ridge, SVR, Gradient Boosting |
+| Ensemble | Out-of-fold predictions, non-negative linear stacking |
+| Core libraries | Python, PyTorch, Transformers, scikit-learn, pandas, NumPy |
+
+## Repository contents
+
+```text
+.
+├── shl-assessment-grammer-scoring-final.ipynb
+├── piyush_sharma.csv
+└── README.md
+```
+
+The notebook contains the modeling workflow. Audio clips, cached embeddings, checkpoints, and other intermediate artifacts are not committed here.
+
+## Execution notes
+
+The notebook is designed around a Kaggle-style input environment and expects the original audio and label files to be available under the input directory.
+
+The workflow uses large pretrained models and audio feature extraction, so a GPU-backed runtime is recommended for practical execution. Install compatible versions of the libraries used in the notebook, including:
+
+```bash
+pip install numpy pandas scikit-learn scipy matplotlib seaborn   librosa soundfile transformers sentence-transformers   torch spacy language-tool-python jupyter
+```
+
+Additional setup may be needed for the LanguageTool Java runtime and model downloads. This is a dependency starting point, not a pinned, fully reproducible environment; the repository does not currently contain a `requirements.txt`.
+
+## Limitations and responsible use
+
+- The audio dataset is small, so generalisation to different accents, recording conditions, ages, or speech contexts is not established.
+- Grammar scores can be influenced by transcription quality and speech-recognition errors.
+- A predicted score should not be treated as a definitive measure of a person's communication ability.
+- The current repository does not include the original audio inputs or a complete environment lockfile.
+- The reported 0.3668 score needs its metric name and evaluation context documented.
+
+## Author
+
+**Piyush Sharma**  
+[GitHub](https://github.com/piyush0920) · [Portfolio](https://piyush0920.github.io/) · [LinkedIn](https://linkedin.com/in/piyush-sharma-6591171ba)
